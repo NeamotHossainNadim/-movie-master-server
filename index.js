@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const app = express();
 
-// Middleware
+// ---------- Middleware ----------
 app.use(cors({
   origin: [
     "http://localhost:5173",
@@ -16,49 +16,51 @@ app.use(cors({
 
 app.use(express.json());
 
-// Environment variables
+// ---------- Environment variables ----------
 const {
   DB_USER,
   DB_PASS,
   DB_NAME = 'movieMasterDB',
-  PORT = 5000
+  PORT = 5000,
+  NODE_ENV
 } = process.env;
 
-// MongoDB URI
+// ---------- MongoDB URI ----------
 const uri = `mongodb+srv://${DB_USER}:${DB_PASS}@cluster0.0qeoous.mongodb.net/${DB_NAME}?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Mongo client
+// ---------- Mongo Client (Vercel safe) ----------
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
-let movieCollection;
+let movieCollection = null;
 
-// ✅ Safe MongoDB connection for serverless
+// ---------- Safe DB connection ----------
 async function connectDB() {
+  if (movieCollection) return movieCollection;
+
   try {
-    if (!movieCollection) {
-      await client.connect();
-      const db = client.db(DB_NAME);
-      movieCollection = db.collection('movies');
-      console.log('✅ MongoDB connected');
-    }
+    await client.connect();
+    const db = client.db(DB_NAME);
+    movieCollection = db.collection('movies');
+    console.log('✅ MongoDB Connected');
     return movieCollection;
-  } catch (err) {
-    console.error('❌ MongoDB connection error:', err);
+  } catch (error) {
+    console.error('❌ MongoDB Connection Failed:', error.message);
+    throw error;
   }
 }
 
-// Test route
+// ---------- Test Route ----------
 app.get('/', (req, res) => {
-  res.send('✅ MovieMaster Pro Server is Running!');
+  res.send('✅ MovieMaster API is running successfully!');
 });
 
-// ✅ Get all movies
+// ---------- Get All Movies ----------
 app.get('/movies', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -72,8 +74,8 @@ app.get('/movies', async (req, res) => {
 
     if (minRating || maxRating) {
       filter.rating = {};
-      if (minRating) filter.rating.$gte = parseFloat(minRating);
-      if (maxRating) filter.rating.$lte = parseFloat(maxRating);
+      if (minRating) filter.rating.$gte = Number(minRating);
+      if (maxRating) filter.rating.$lte = Number(maxRating);
     }
 
     const movies = await collection
@@ -82,12 +84,12 @@ app.get('/movies', async (req, res) => {
       .toArray();
 
     res.json(movies);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch movies', details: error.message });
   }
 });
 
-// ✅ Get single movie by ID
+// ---------- Get Single Movie ----------
 app.get('/movies/:id', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -101,12 +103,12 @@ app.get('/movies/:id', async (req, res) => {
     }
 
     res.json(movie);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch movie', details: error.message });
   }
 });
 
-// ✅ Get movies by user
+// ---------- Get Movies By User ----------
 app.get('/my-movies/:email', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -117,12 +119,12 @@ app.get('/my-movies/:email', async (req, res) => {
       .toArray();
 
     res.json(movies);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch user movies', details: error.message });
   }
 });
 
-// ✅ Add movie
+// ---------- Add Movie ----------
 app.post('/movies', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -130,7 +132,7 @@ app.post('/movies', async (req, res) => {
 
     if (!movie.title || !movie.addedBy) {
       return res.status(400).json({
-        error: 'Title and addedBy (email) are required'
+        error: 'Title and addedBy are required'
       });
     }
 
@@ -142,12 +144,12 @@ app.post('/movies', async (req, res) => {
       success: true,
       insertedId: result.insertedId
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to add movie', details: error.message });
   }
 });
 
-// ✅ Update movie (owner only)
+// ---------- Update Movie (Owner Only) ----------
 app.put('/movies/:id', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -155,18 +157,14 @@ app.put('/movies/:id', async (req, res) => {
 
     const { userEmail, ...updateData } = req.body;
 
-    const movie = await collection.findOne({
-      _id: new ObjectId(id)
-    });
+    const movie = await collection.findOne({ _id: new ObjectId(id) });
 
     if (!movie) {
       return res.status(404).json({ error: 'Movie not found' });
     }
 
     if (movie.addedBy !== userEmail) {
-      return res.status(403).json({
-        error: 'Only the owner can edit this movie'
-      });
+      return res.status(403).json({ error: 'You are not allowed to update this movie' });
     }
 
     delete updateData._id;
@@ -178,48 +176,40 @@ app.put('/movies/:id', async (req, res) => {
       { $set: updateData }
     );
 
-    res.json({
-      success: true,
-      message: 'Movie updated successfully'
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ success: true, message: 'Movie updated successfully' });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update movie', details: error.message });
   }
 });
 
-// ✅ Delete movie (owner only)
+// ---------- Delete Movie (Owner Only) ----------
 app.delete('/movies/:id', async (req, res) => {
   try {
     const collection = await connectDB();
     const id = req.params.id;
     const { userEmail } = req.body;
 
-    const movie = await collection.findOne({
-      _id: new ObjectId(id)
-    });
+    const movie = await collection.findOne({ _id: new ObjectId(id) });
 
     if (!movie) {
       return res.status(404).json({ error: 'Movie not found' });
     }
 
     if (movie.addedBy !== userEmail) {
-      return res.status(403).json({
-        error: 'Only the owner can delete this movie'
-      });
+      return res.status(403).json({ error: 'You are not allowed to delete this movie' });
     }
 
     await collection.deleteOne({ _id: new ObjectId(id) });
 
-    res.json({
-      success: true,
-      message: 'Movie deleted successfully'
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ success: true, message: 'Movie deleted successfully' });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete movie', details: error.message });
   }
 });
 
-// ✅ Top rated movies
+// ---------- Top Rated Movies ----------
 app.get('/top-rated', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -231,12 +221,12 @@ app.get('/top-rated', async (req, res) => {
       .toArray();
 
     res.json(movies);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch top rated movies', details: error.message });
   }
 });
 
-// ✅ Recently added
+// ---------- Recently Added Movies ----------
 app.get('/recent', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -248,12 +238,12 @@ app.get('/recent', async (req, res) => {
       .toArray();
 
     res.json(movies);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch recent movies', details: error.message });
   }
 });
 
-// ✅ Stats
+// ---------- Stats ----------
 app.get('/stats/count', async (req, res) => {
   try {
     const collection = await connectDB();
@@ -261,15 +251,17 @@ app.get('/stats/count', async (req, res) => {
     const count = await collection.countDocuments();
 
     res.json({ totalMovies: count });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch movie count', details: error.message });
   }
 });
 
-// ✅ Local server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+// ✅ Only run locally — NOT for Vercel
+if (NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  });
+}
 
-// ✅ Export app for Vercel
+// ✅ Export for Vercel
 module.exports = app;
