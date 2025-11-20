@@ -38,5 +38,13 @@ app.post('/movies', async (req, res) => {
   res.send(result);
 });
 
+app.get('/', (req, res) => {
+  res.send('✅ Movie Master Server is Running!');
+});
+
+app.get('/test', (req, res) => {
+  res.json({ message: '✅ Server is working perfectly!' });
+});
+
 module.exports = app;
 
