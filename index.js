@@ -5,12 +5,12 @@ require('dotenv').config();
 
 const app = express();
 
-
 app.use(cors({
   origin: [
     "http://localhost:5173",
     "https://amarmoviehouse.netlify.app"
   ],
+  methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
 
@@ -20,8 +20,7 @@ const {
   DB_USER,
   DB_PASS,
   DB_NAME = 'movieMasterDB',
-  PORT = 5000,
-  NODE_ENV
+  PORT = 5000
 } = process.env;
 
 const uri = `mongodb+srv://${DB_USER}:${DB_PASS}@cluster0.0qeoous.mongodb.net/${DB_NAME}?retryWrites=true&w=majority&appName=Cluster0`;
@@ -39,185 +38,124 @@ let movieCollection = null;
 async function connectDB() {
   if (movieCollection) return movieCollection;
 
-  try {
-    if (!DB_USER || !DB_PASS) {
-      throw new Error('Database credentials not found. Please set DB_USER and DB_PASS environment variables.');
-    }
-
-    await client.connect();
-    const db = client.db(DB_NAME);
-    movieCollection = db.collection('movies');
-    console.log('MongoDB Connected');
-    return movieCollection;
-  } catch (error) {
-    console.error('MongoDB Connection Failed:', error.message);
-    throw error;
+  if (!DB_USER || !DB_PASS) {
+    throw new Error("DB credentials missing");
   }
+
+  await client.connect();
+  const db = client.db(DB_NAME);
+  movieCollection = db.collection('movies');
+  console.log('✅ MongoDB Connected');
+  return movieCollection;
 }
 
 app.get('/', (req, res) => {
-  res.send('MovieMaster API is running successfully!');
+  res.send('✅ MovieMaster API is running!');
 });
 
-app.get('/health', async (req, res) => {
-  try {
-    console.log('Health check - Environment variables status:');
-    console.log('DB_USER:', DB_USER ? '✓ Set' : '✗ Missing');
-    console.log('DB_PASS:', DB_PASS ? '✓ Set' : '✗ Missing');
-    console.log('DB_NAME:', DB_NAME);
-    
-    await connectDB();
-
-    res.json({ 
-      status: 'healthy',
-      database: 'connected',
-      environment: NODE_ENV || 'development',
-      timestamp: new Date()
-    });
-  } catch (error) {
-    console.error('Health check failed:', error.message);
-    res.status(500).json({ 
-      status: 'unhealthy',
-      database: 'disconnected',
-      error: error.message,
-      details: NODE_ENV !== 'production' ? error.stack : undefined
-    });
-  }
-});
-
+/* ========================
+   GET ALL MOVIES
+======================== */
 app.get('/movies', async (req, res) => {
   try {
-    console.log('Fetching movies...');
-    console.log('Environment check - DB_USER:', DB_USER ? '✓' : '✗');
-    console.log('Environment check - DB_PASS:', DB_PASS ? '✓' : '✗');
-    
     const collection = await connectDB();
-
     const { genre, minRating, maxRating } = req.query;
     const filter = {};
 
-    if (genre) {
-      filter.genre = { $in: genre.split(',') };
-    }
-
+    if (genre) filter.genre = { $in: genre.split(',') };
     if (minRating || maxRating) {
       filter.rating = {};
       if (minRating) filter.rating.$gte = Number(minRating);
       if (maxRating) filter.rating.$lte = Number(maxRating);
     }
 
-    console.log('Query filter:', JSON.stringify(filter));
-    
-    const movies = await collection
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .toArray();
-
-    console.log(`Found ${movies.length} movies`);
+    const movies = await collection.find(filter).sort({ createdAt: -1 }).toArray();
     res.json(movies);
-  } catch (error) {
-    console.error('Error in /movies:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch movies', 
-      details: error.message,
-      stack: NODE_ENV !== 'production' ? error.stack : undefined
-    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch movies" });
   }
 });
 
-
+/* ========================
+   GET SINGLE MOVIE
+======================== */
 app.get('/movies/:id', async (req, res) => {
   try {
     const collection = await connectDB();
+    const { id } = req.params;
 
-    if (!ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: 'Invalid movie ID format' });
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid ID" });
     }
 
-    const movie = await collection.findOne({
-      _id: new ObjectId(req.params.id)
-    });
-
-    if (!movie) {
-      return res.status(404).json({ error: 'Movie not found' });
-    }
+    const movie = await collection.findOne({ _id: new ObjectId(id) });
+    if (!movie) return res.status(404).json({ error: "Movie not found" });
 
     res.json(movie);
-  } catch (error) {
-    console.error('Error in /movies/:id:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch movie', 
-      details: error.message 
-    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch movie" });
   }
 });
 
+/* ========================
+   GET MY MOVIES
+======================== */
 app.get('/my-movies/:email', async (req, res) => {
   try {
     const collection = await connectDB();
+    const email = req.params.email;
 
     const movies = await collection
-      .find({ addedBy: req.params.email })
+      .find({ addedBy: email })
       .sort({ createdAt: -1 })
       .toArray();
 
     res.json(movies);
-  } catch (error) {
-    console.error('Error in /my-movies:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch user movies', 
-      details: error.message 
-    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch user movies" });
   }
 });
 
+/* ========================
+   ADD MOVIE
+======================== */
 app.post('/movies', async (req, res) => {
   try {
     const collection = await connectDB();
     const movie = req.body;
 
     if (!movie.title || !movie.addedBy) {
-      return res.status(400).json({
-        error: 'Title and addedBy are required'
-      });
+      return res.status(400).json({ error: "Title & addedBy required" });
     }
 
     movie.createdAt = new Date();
 
     const result = await collection.insertOne(movie);
-
-    res.status(201).json({
-      success: true,
-      insertedId: result.insertedId
-    });
-  } catch (error) {
-    console.error('Error in POST /movies:', error);
-    res.status(500).json({ 
-      error: 'Failed to add movie', 
-      details: error.message 
-    });
+    res.status(201).json({ success: true, insertedId: result.insertedId });
+  } catch {
+    res.status(500).json({ error: "Failed to add movie" });
   }
 });
 
+/* ========================
+   UPDATE MOVIE
+======================== */
 app.put('/movies/:id', async (req, res) => {
   try {
     const collection = await connectDB();
     const id = req.params.id;
 
     if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ error: 'Invalid movie ID format' });
+      return res.status(400).json({ error: 'Invalid ID' });
     }
 
     const { userEmail, ...updateData } = req.body;
 
     const movie = await collection.findOne({ _id: new ObjectId(id) });
-
-    if (!movie) {
-      return res.status(404).json({ error: 'Movie not found' });
-    }
+    if (!movie) return res.status(404).json({ error: 'Movie not found' });
 
     if (movie.addedBy !== userEmail) {
-      return res.status(403).json({ error: 'You are not allowed to update this movie' });
+      return res.status(403).json({ error: 'Not allowed to update' });
     }
 
     delete updateData._id;
@@ -229,112 +167,96 @@ app.put('/movies/:id', async (req, res) => {
       { $set: updateData }
     );
 
-    res.json({ success: true, message: 'Movie updated successfully' });
-
-  } catch (error) {
-    console.error('Error in PUT /movies/:id:', error);
-    res.status(500).json({ 
-      error: 'Failed to update movie', 
-      details: error.message 
-    });
+    res.json({ success: true, message: "Movie updated" });
+  } catch {
+    res.status(500).json({ error: "Failed to update" });
   }
 });
 
+/* ========================
+   ✅ FIXED DELETE MOVIE
+======================== */
 app.delete('/movies/:id', async (req, res) => {
   try {
     const collection = await connectDB();
-    const id = req.params.id;
+    const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ error: 'Invalid movie ID format' });
+      return res.status(400).json({ error: "Invalid movie ID" });
     }
 
-    const { userEmail } = req.body;
+    // ✅ Safe way to get userEmail from multiple places
+    const userEmail =
+      req.headers['user-email'] ||
+      req.query.userEmail ||
+      req.body?.userEmail;
+
+    if (!userEmail) {
+      return res.status(401).json({ error: "User email required to delete" });
+    }
 
     const movie = await collection.findOne({ _id: new ObjectId(id) });
 
     if (!movie) {
-      return res.status(404).json({ error: 'Movie not found' });
+      return res.status(404).json({ error: "Movie not found" });
     }
 
     if (movie.addedBy !== userEmail) {
-      return res.status(403).json({ error: 'You are not allowed to delete this movie' });
+      return res.status(403).json({ error: "Unauthorized delete attempt" });
     }
 
     await collection.deleteOne({ _id: new ObjectId(id) });
 
-    res.json({ success: true, message: 'Movie deleted successfully' });
+    res.json({ success: true, message: "Movie deleted successfully" });
 
   } catch (error) {
-    console.error('Error in DELETE /movies/:id:', error);
-    res.status(500).json({ 
-      error: 'Failed to delete movie', 
-      details: error.message 
-    });
+    console.error("❌ Delete Failed:", error);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-
-app.get('/top-rated', async (req, res) =>{
+/* ========================
+   TOP RATED MOVIES
+======================== */
+app.get('/top-rated', async (req, res) => {
   try {
     const collection = await connectDB();
-
-    const movies = await collection
-      .find()
-      .sort({ rating: -1 })
-      .limit(5)
-      .toArray();
-
+    const movies = await collection.find().sort({ rating: -1 }).limit(5).toArray();
     res.json(movies);
-  } catch (error) {
-    console.error('Error in /top-rated:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch top rated movies', 
-      details: error.message 
-    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch top rated" });
   }
 });
 
+/* ========================
+   RECENT MOVIES
+======================== */
 app.get('/recent', async (req, res) => {
   try {
     const collection = await connectDB();
-
-    const movies = await collection
-      .find()
-      .sort({ createdAt: -1 })
-      .limit(6)
-      .toArray();
-
+    const movies = await collection.find().sort({ createdAt: -1 }).limit(6).toArray();
     res.json(movies);
-  } catch (error) {
-    console.error('Error in /recent:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch recent movies', 
-      details: error.message 
-    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch recent" });
   }
 });
 
+/* ========================
+   MOVIE COUNT
+======================== */
 app.get('/stats/count', async (req, res) => {
   try {
     const collection = await connectDB();
-
     const count = await collection.countDocuments();
-
     res.json({ totalMovies: count });
-  } catch (error) {
-    console.error('Error in /stats/count:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch movie count', 
-      details: error.message 
-    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch count" });
   }
 });
 
-if (NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-module.exports = app;
+/* ========================
+   SERVER START
+======================== */
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
